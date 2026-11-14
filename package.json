@@ -1,0 +1,15 @@
+{
+  "name": "indoor-pc-mesh-studio",
+  "version": "1.0.0",
+  "description": "室内扫描点云 -> 网格制作平台（BPA / 平面区域生长重建内核）",
+  "type": "module",
+  "main": "src/server/server.js",
+  "scripts": {
+    "start": "node src/server/server.js",
+    "selftest": "node test/selftest.js",
+    "gen-data": "node test/make_data.js",
+    "vendor": "bash scripts/fetch_vendor.sh"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>室内扫描点云 → 网格制作平台</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/static/vendor/three.module.js",
+        "three/addons/": "/static/vendor/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">室内点云重建工作台</div>
+    <div class="top-actions">
+      <label class="btn">
+        上传点云
+        <input id="fileInput" type="file" accept=".json,.xyz,.txt,.pts,.ply" hidden />
+      </label>
+      <div class="scale-box">
+        显示尺度
+        <input id="scaleInput" type="number" value="1" min="0.01" max="100" step="0.1" />
+        <span class="muted">×</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel left">
+      <section class="card">
+        <h2>1. 载入点云</h2>
+        <div id="scenarioList" class="scenario-list"></div>
+        <div id="cloudMeta" class="cloud-meta muted">尚未载入点云</div>
+      </section>
+
+      <section class="card">
+        <h2>2. 噪点候选（只标记，可恢复）</h2>
+        <div class="row between">
+          <span id="noiseCount" class="muted">运行后显示</span>
+          <div class="row">
+            <button id="removeNoiseBtn" class="btn small danger" disabled>剔除所选</button>
+            <button id="restoreNoiseBtn" class="btn small" disabled>恢复候选</button>
+          </div>
+        </div>
+        <div id="noiseList" class="noise-list"></div>
+      </section>
+
+      <section class="card">
+        <h2>3. 重建参数（内核 schema 驱动）</h2>
+        <form id="paramForm" class="params"></form>
+        <button id="runBtn" class="btn primary wide" disabled>运行重建</button>
+      </section>
+    </aside>
+
+    <section class="viewport-wrap">
+      <div id="viewport"></div>
+      <div class="viewport-toolbar">
+        <label><input type="checkbox" id="showPoints" checked /> 原始点</label>
+        <label><input type="checkbox" id="showMesh" checked /> 重建面</label>
+        <label><input type="checkbox" id="showBoundary" checked /> 边界边</label>
+        <label><input type="checkbox" id="showAmbiguous" checked /> 法线歧义点</label>
+        <label><input type="checkbox" id="showUnsupported" checked /> 未支撑点</label>
+        <label><input type="checkbox" id="colorDistance" /> 按观测距离着色</label>
+      </div>
+      <div id="failurePanel" class="failure-panel hidden"></div>
+    </section>
+
+    <aside class="panel right">
+      <section class="card">
+        <h2>运行结果（冻结）</h2>
+        <div id="runMeta" class="muted">尚无运行</div>
+        <div class="export-row">
+          <span class="muted">导出网格：</span>
+          <a class="btn tiny" href="/api/export?format=ply">PLY</a>
+          <a class="btn tiny" href="/api/export?format=plybin">PLY(bin)</a>
+          <a class="btn tiny" href="/api/export?format=obj">OBJ</a>
+          <a class="btn tiny" href="/api/export?format=json">JSON</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>输出检查</h2>
+        <div id="qcPanel" class="qc"></div>
+        <p class="notice" id="topoNotice"></p>
+      </section>
+
+      <section class="card">
+        <h2>区域与空洞（平面后端）</h2>
+        <div id="regionPanel" class="region-list muted">BPA 后端无区域报告</div>
+      </section>
+
+      <section class="card">
+        <h2>阶段耗时</h2>
+        <div id="timingPanel" class="timing muted"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,6 +1,9 @@
 # solo-manager GitHub sync ignores
 node_modules/
 vendor/
+# 本地化的 Three.js 前端依赖需纳入版本库（无构建步骤、离线可用）
+!web/static/vendor/
+!web/static/vendor/**
 dist/
 build/
 .next/
@@ -23,3 +26,4 @@ __pycache__/
 *.log
 .env
 .env.*
+data/
