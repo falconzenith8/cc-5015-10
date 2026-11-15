@@ -8,6 +8,9 @@
     "start": "node src/server/server.js",
     "selftest": "node test/selftest.js",
     "gen-data": "node test/make_data.js",
+    "gen-fixtures": "node test/acceptance/generate.js",
+    "acceptance": "node test/acceptance/generate.js --check && node test/acceptance/run.js",
+    "acceptance:replay": "node test/acceptance/run.js --replay",
     "vendor": "bash scripts/fetch_vendor.sh"
   },
   "engines": { "node": ">=18" },

@@ -27,26 +27,36 @@ npm start
 > 若无法联网，把 `three.module.js` 与 `addons/controls/OrbitControls.js` 手动放到
 > `web/static/vendor/` 对应路径即可，服务本身与重建内核不需要网络。
 
-命令行自检（不启动服务，覆盖全部验证场景与诚实性红线）：
+**图形入口（点云重建主入口）**：浏览器视窗左侧“载入点云”即点云重建的图形入口——
+“点云重建回归样例”列出 `test/acceptance/fixtures` 下的全部样例（含解析真值），点击即载入；
+“数据场景”列出 `data/` 下的 `s1`–`s5`。两者的重建、观测距离检查、导出都在同一视窗完成。
+
+命令行仅作为辅助手段（不启动服务，供 CI / 快速回归）：
 
 ```bash
-npm run selftest
+npm run selftest        # 旧样例回归（文件产出、旧红线）
+npm run acceptance      # 独立验收集：解析真值 + 受控错误注入
+npm run acceptance:replay  # 重放上次记录的失败点
 ```
 
 ---
 
 ## 二、界面操作流程（模型操作视窗）
 
-1. **载入点云（可设置尺度）**：左侧选择内置场景 `s1`–`s5`，或上传 `.json/.xyz/.txt/.pts/.ply`。
-   顶栏“显示尺度”只改变可视化缩放，**不会改写原始数据**。
+1. **载入点云（可设置尺度）**：左侧“点云重建回归样例”直接打开带解析真值的验收集样例；
+   “数据场景”选择内置场景 `s1`–`s5`；或上传 `.json/.xyz/.txt/.pts/.ply`。
+   顶栏“显示尺度”只改变可视化缩放，**不会改写原始数据，也不参与距离计算**。
 2. **设置参数**：参数控件由重建内核的 `PARAM_SCHEMA` 自动生成，前端不允许提交内核不认识的参数。
 3. **运行重建**：结果区呈现重建表面、橙色**边界边**、红色**法线歧义点**、橙色**未支撑点**；
    勾选“按观测距离着色”可按点到传感器的距离对原始点着色。
-4. **失败反馈回到点云重建**：失败时视窗下方弹出面板，给出失败阶段、定位信息与修复建议，
+4. **观测距离检查（实际运算）**：每次运行后由后端真实计算“观测点 → 重建表面”距离；
+   若当前点云来自回归样例，还给出“重建表面 → 解析真值”距离、独立容差与“孔洞被面片覆盖面积占比”。
+   计算失败时在点云重建界面显式提示原因，不会留下看似正常的空面板。
+5. **失败反馈回到点云重建**：失败时视窗下方弹出面板，给出失败阶段、定位信息与修复建议，
    引导回左侧调参或在噪点面板恢复边界点后重跑——而不是静默产生错误网格。
-5. **噪点候选（可恢复）**：候选只标记不删除；勾选后“剔除所选”产生修订版，
+6. **噪点候选（可恢复）**：候选只标记不删除；勾选后“剔除所选”产生修订版，
    “恢复候选”可从冻结的原始点云把误删点取回。
-6. **导出网格**：右侧导出 PLY（ASCII/二进制）、OBJ、JSON（含冻结参数与质检报告）。
+7. **导出网格**：右侧导出 PLY（ASCII/二进制）、OBJ、JSON（含冻结参数与质检报告）。
 
 ---
 
@@ -106,36 +116,73 @@ BPA 在玻璃矩形**洞缘**可能形成极少量受支撑窄三角（`s5` 约 
 
 ---
 
-## 六、目录结构
+## 六、独立验收集（`npm run acceptance`）
+
+与 `selftest` 互补：`selftest` 保证旧样例跑到底；验收集用**解析真值**独立度量表面质量，
+并注入受控错误，证明坏结果会被暴露。
+
+- **真值独立**：`src/core/analytic.js` 仅由几何定义给出点到曲面距离、期望法线与区域归属，
+  不读任何重建输出；`src/core/metrics.js` 独立实现面片内部重心采样、拓扑、覆盖与封闭度量。
+- **阈值独立推导**：有效区距离容差 = `max(4×注入噪声幅度, 0.5×实测最近邻中位数)`；
+  噪声幅度与点间距都来自 fixture 构造或点集实测，不用重建报告中的自述值，也没有兜底默认值。
+- **有效区定义**：排除（膨胀后的）未观测区域与真值面边界带；边界带单独按 `1.25×点间距` 上界检查。
+- **错误封闭按面积判定**：面片落在未观测区域内的面积份额 > 50% 即判错误封闭。
+  洞缘的合法窄三角必然跨过孔边，但占比很小（本验收集实测 BPA 13.9%）；伪造回波覆盖达 96.9%。
+- **正反例**：密度骤变与观测孔洞构造正例；注入伪造回波、整体平移、翻转法线、移除观测、抽稀
+  构造反例（负控），断言距离与封闭度量确实能抓到坏结果。
+- **故意改变法线方向**：`plane_normals_flipped` 把传感器换到平面另一侧，要求绕序一致率显著下降，
+  并保留反向面片索引以便复跑。
+- **失败点可复跑**：失败时写出 `test/acceptance/failures/failure-points.json`
+  （fixture 哈希 + 方法 + 冻结参数 + 注入描述 + 点/面索引 + 指标 + 阈值）；
+  `npm run acceptance:replay` 按记录重建同一坏结果并重新度量，修复后显式报告“不再复现”。
+- **fixture 入库且确定性**：`npm run gen-fixtures` 生成，`node test/acceptance/generate.js --check`
+  逐字节校验；`.gitignore` 只忽略 `data/`，不忽略 `test/acceptance/fixtures/`。
+
+当前基线：**89 项断言通过，14 项负控全部生效**。
+
+---
+
+## 七、目录结构
 
 ```
 src/
   core/           零依赖几何内核（KD-tree、特征分解、点云、IO、法线、噪点、质检、流水线、schema）
+    analytic.js   解析真值（点->曲面距离、期望法线、区域生存/膨胀）
+    metrics.js    独立网格度量（面内采样、拓扑、覆盖、错误封闭面积占比）
     reconstruct/  bpa.js（球旋转）、planar.js（平面区域生长）
-  server/         server.js 零依赖 node:http 服务（载入/修订/运行/导出/schema）
+  server/         server.js 零依赖 node:http 服务（载入/修订/运行/导出/schema/距离检查）
 web/
-  index.html      视窗与三栏工作台
-  app.js          Three.js 渲染 + schema 驱动控件 + 失败/修订联动
+  index.html      视窗与三栏工作台（含回归样例入口与观测距离检查面板）
+  app.js          Three.js 渲染 + schema 驱动控件 + 失败/修订/距离联动
   styles.css
   static/vendor/  本地化 Three.js r160 与 OrbitControls
 test/
   make_data.js    五个合成场景生成器
-  selftest.js     命令行自测
+  selftest.js     旧样例回归（40 项断言）
+  acceptance/
+    generate.js   确定性 fixture 生成（--check 逐字节校验）
+    inject.js     受控错误注入（伪造回波/平移/翻法线/无观测/抽稀）
+    run.js        独立验收集（--replay 重放失败点）
+    fixtures/     入库的验收样例（含解析真值）
+    failures/     失败点集（可复跑；last-run.json 运行报告被 git 忽略）
 scripts/
   fetch_vendor.sh 供应商下载与导入路径改写
 data/             生成的场景数据（git 忽略）
 ```
 
-## 七、HTTP API 摘要
+## 八、HTTP API 摘要
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
 | GET | `/api/schema` | 内核参数 schema 与默认值（驱动前端控件） |
 | GET | `/api/scenarios` | 内置场景列表 |
 | POST | `/api/load-scenario` | 按名载入场景 |
+| GET | `/api/regression-samples` | 点云重建回归样例列表（含解析真值） |
+| POST | `/api/load-regression-sample` | 从模型操作视窗打开回归样例 |
 | POST | `/api/upload` | 上传点云（multipart 或 raw body） |
 | GET | `/api/cloud` | 当前点云摘要 |
 | POST | `/api/revise` | `mode=remove/restore` 产生修订版（原点不动） |
 | POST | `/api/run` | 运行流水线；失败返回 422 + `pipelineError`（阶段/定位/提示） |
 | GET | `/api/run/latest` | 最近一次运行结果 |
+| GET | `/api/distance-check` | 观测点→重建表面距离；样例另给表面→解析真值距离与孔洞覆盖占比 |
 | GET | `/api/export?format=ply|plybin|obj|json` | 导出网格 |

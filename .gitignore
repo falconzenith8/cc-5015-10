@@ -27,3 +27,4 @@ __pycache__/
 .env
 .env.*
 data/
+test/acceptance/failures/last-run.json

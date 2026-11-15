@@ -20,12 +20,14 @@ export function reconstructBPA(points, normals, scales, opts = {}) {
     maxEdgeFactor = 6.0,
     minTriangleArea = 1e-12,
     minEdgeRatio = 0.28, // 最短边/最长边低于此值视为细长搭桥片
+    maxEdgeLocalFactor = 2.0, // 单边长度上限 = 该因子 × 两端局部尺度（防跨空洞长边）
   } = opts;
 
   const n = points.length;
   const medianScale = median(scales);
   const radii = radiusFactors.map((f) => f * medianScale);
   const maxEdge = maxEdgeFactor * medianScale;
+  const edgeAllowed = (a, b) => distP(points[a], points[b]) <= Math.min(maxEdge, maxEdgeLocalFactor * Math.max(scales[a], scales[b]));
   const cosThr = Math.cos((angleThresholdDeg * Math.PI) / 180);
   const tree = new KDTree(points);
 
@@ -52,9 +54,8 @@ export function reconstructBPA(points, normals, scales, opts = {}) {
       if (owner && sameSideOfEdge(x, y, z, owner.opp)) return false;
     }
     // 防空洞跨越：三条边都必须短于 maxEdge，且三个顶点在彼此的局部邻域内
-    const localReach = Math.max(scales[a], scales[b], scales[c]) * maxEdgeFactor;
     for (const [x, y] of [[a, b], [b, c], [c, a]]) {
-      if (distP(points[x], points[y]) > Math.min(maxEdge, localReach)) return false;
+      if (!edgeAllowed(x, y)) return false;
     }
     // 防对角搭桥：三角形内心附近必须有真实点（玻璃缺测/遮挡空洞的内心是空的）
     if (!hasSupportNearIncenter(a, b, c)) return false;
@@ -237,7 +238,7 @@ export function reconstructBPA(points, normals, scales, opts = {}) {
     }
     let best = null;
     for (const ci of cand) {
-      if (distP(points[ci], p0) > maxEdge && distP(points[ci], p1) > maxEdge) continue;
+      if (!edgeAllowed(v0, ci) || !edgeAllowed(v1, ci)) continue;
       // 反转绕序后的面法线必须与三个顶点法线兼容
       const nf = faceNormal(v1, v0, ci);
       if (norm(nf) === 0) continue;
@@ -264,7 +265,7 @@ export function reconstructBPA(points, normals, scales, opts = {}) {
     const planeN = norm(axisN) > 1e-6 ? axisN : normals[v0];
     let best = null;
     for (const ci of cand) {
-      if (distP(points[ci], p0) > maxEdge || distP(points[ci], p1) > maxEdge) continue;
+      if (!edgeAllowed(v0, ci) || !edgeAllowed(v1, ci)) continue;
       const nf = faceNormal(v1, v0, ci);
       if (norm(nf) === 0) continue;
       // 回退只约束法线夹角（绝对点积）；绕序由 (v1,v0,ci) 的边约定保证
@@ -304,7 +305,7 @@ export function reconstructBPA(points, normals, scales, opts = {}) {
         if (!ori.ok) continue;
         const [a, b, c] = ori.tri;
         if ((edgeCount.get(edgeKey(a, b)) || 0) >= 2 || (edgeCount.get(edgeKey(a, c)) || 0) >= 2) continue;
-        if (distP(points[b], points[c]) > maxEdge) continue;
+        if (!edgeAllowed(a, b) || !edgeAllowed(b, c) || !edgeAllowed(c, a)) continue;
         if (triArea(points[a], points[b], points[c]) < minTriangleArea) continue;
         const bc = ballCenter(a, b, c, r);
         if (!bc || !emptyBall(bc.center, r, [a, b, c])) continue;
@@ -325,7 +326,7 @@ export function reconstructBPA(points, normals, scales, opts = {}) {
         if (!ori.ok) continue;
         const [a, b, c] = ori.tri;
         if ((edgeCount.get(edgeKey(a, b)) || 0) >= 2 || (edgeCount.get(edgeKey(a, c)) || 0) >= 2) continue;
-        if (distP(points[b], points[c]) > maxEdge) continue;
+        if (!edgeAllowed(a, b) || !edgeAllowed(b, c) || !edgeAllowed(c, a)) continue;
         if (triArea(points[a], points[b], points[c]) < minTriangleArea) continue;
         const circ = circumcircle2(proj2(points[a]), proj2(points[b]), proj2(points[c]));
         if (!circ) continue;
@@ -434,7 +435,7 @@ export function reconstructBPA(points, normals, scales, opts = {}) {
     const proj2 = (p) => [dot(sub(p, p0), ex), dot(sub(p, p0), ey)];
     let best = -1, bestScore = Infinity;
     for (const ci of cand) {
-      if (distP(points[ci], p0) > maxEdge || distP(points[ci], p1) > maxEdge) continue;
+      if (!edgeAllowed(v0, ci) || !edgeAllowed(v1, ci)) continue;
       // 新面绕序 (v1,v0,ci)，法线须与顶点法线同向（有符号检查保证整体朝向）
       const nf = faceNormal(v1, v0, ci);
       if (norm(nf) === 0) continue;

@@ -34,6 +34,9 @@
     <aside class="panel left">
       <section class="card">
         <h2>1. 载入点云</h2>
+        <div class="subhead">点云重建回归样例（含解析真值）</div>
+        <div id="regressionList" class="scenario-list"></div>
+        <div class="subhead">数据场景</div>
         <div id="scenarioList" class="scenario-list"></div>
         <div id="cloudMeta" class="cloud-meta muted">尚未载入点云</div>
       </section>
@@ -87,6 +90,16 @@
         <h2>输出检查</h2>
         <div id="qcPanel" class="qc"></div>
         <p class="notice" id="topoNotice"></p>
+      </section>
+
+      <section class="card">
+        <h2>观测距离检查（实际运算）</h2>
+        <div class="row between">
+          <span class="muted">显示尺度只改可视化，不参与距离计算</span>
+          <button id="distanceBtn" class="btn small" disabled>重新检查</button>
+        </div>
+        <div id="distancePanel" class="qc muted">运行重建后计算</div>
+        <div id="distanceError" class="notice hidden"></div>
       </section>
 
       <section class="card">

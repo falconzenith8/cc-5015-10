@@ -209,6 +209,7 @@ async function loadScenarios() {
   const { scenarios } = await api('/api/scenarios');
   const box = $('scenarioList');
   box.innerHTML = '';
+  if (!scenarios.length) box.innerHTML = '<span class="muted">无数据场景（可先 npm run gen-data）</span>';
   scenarios.forEach((name) => {
     const b = document.createElement('button');
     b.className = 'btn';
@@ -217,9 +218,30 @@ async function loadScenarios() {
     box.appendChild(b);
   });
 }
+async function loadRegressions() {
+  const { samples } = await api('/api/regression-samples');
+  const box = $('regressionList');
+  box.innerHTML = '';
+  if (!samples.length) { box.innerHTML = '<span class="muted">无回归样例（可先 npm run gen-fixtures）</span>'; return; }
+  samples.forEach((s) => {
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = s.name;
+    b.title = `${s.description}\n解析真值：${s.analyticKind}\n未观测区域：${s.unobserved.join(', ') || '—'}\n点数：${s.pointCount}`;
+    b.onclick = () => loadRegressionSample(s.name);
+    box.appendChild(b);
+  });
+}
 async function loadScenario(name) {
   const r = await api('/api/load-scenario', { method: 'POST', body: JSON.stringify({ name }) });
   setCloud(r.cloud, r.scenario);
+}
+async function loadRegressionSample(name) {
+  const r = await api('/api/load-regression-sample', { method: 'POST', body: JSON.stringify({ name }) });
+  setCloud(r.cloud, {
+    description: `${r.sample.description}\n解析真值：${r.sample.analyticKind}；未观测区域：${r.sample.unobserved.join(', ') || '—'}；` +
+      `已排除非表面标记点 ${r.sample.excludedTagCount} 个`,
+  });
 }
 function setCloud(cloud, scenario) {
   state.cloud = cloud;
@@ -323,6 +345,7 @@ $('runBtn').addEventListener('click', async () => {
     renderRun(run);
     presentRun(run);
     presentNoise(run);
+    await presentDistanceCheck();
   } catch (err) {
     showFailure(err);
   } finally {
@@ -424,12 +447,64 @@ function showFailure(err) {
   }
 }
 function hideFailure() { $('failurePanel').classList.add('hidden'); }
+// ---------------- 观测距离检查（数值全部来自后端实际运算） ----------------
+async function presentDistanceCheck() {
+  const panel = $('distancePanel');
+  const errBox = $('distanceError');
+  errBox.classList.add('hidden');
+  panel.className = 'qc muted';
+  panel.textContent = '计算中…';
+  $('distanceBtn').disabled = true;
+  try {
+    const d = await api('/api/distance-check');
+    panel.className = 'qc';
+    const p2m = d.pointToMesh;
+    const rows = [
+      ['观测点 → 重建表面 中位', fmt(p2m.median)],
+      ['观测点 → 重建表面 p95', fmt(p2m.p95)],
+      ['观测点 → 重建表面 最大', fmt(p2m.max)],
+      ['未覆盖观测点', `<span class="pill ${p2m.uncoveredCount ? 'bad' : 'ok'}">${p2m.uncoveredCount}</span>`],
+      ['最近邻间距 中位', fmt(d.nnMedian)],
+    ];
+    if (d.hasAnalyticTruth) {
+      const t = d.surfaceToTruth, c = d.closure;
+      rows.push(
+        ['重建表面 → 解析真值 均值', fmt(t.mean)],
+        ['重建表面 → 解析真值 最大', fmt(t.max)],
+        ['表面顶点 → 真值 中位/p95', `${fmt(t.perVertexMedian)} / ${fmt(t.perVertexP95)}`],
+        ['独立容差', `${fmt(d.tolerance.value)} <span class="muted">(${d.tolerance.rule})</span>`],
+        ['孔洞被面片覆盖面积占比', `<span class="pill ${c.fraction > 0.5 ? 'bad' : 'ok'}">${(c.fraction * 100).toFixed(1)}%</span>`],
+      );
+    }
+    panel.innerHTML = rows.map(([k, v]) => `<div><span class="k">${k}</span><span class="v">${v}</span></div>`).join('') +
+      `<p class="muted" style="margin:8px 0 0">${d.hasAnalyticTruth
+        ? `样例 <b>${d.truth.sample}</b>（${d.truth.analyticKind}）提供解析真值；距离与孔洞覆盖均为后端实际运算。`
+        : d.note}</p>`;
+  } catch (err) {
+    // 异常必须在点云重建界面显式提示，而不是留一个看起来正常的空面板
+    panel.className = 'qc muted';
+    panel.textContent = '观测距离检查不可用';
+    errBox.classList.remove('hidden');
+    errBox.textContent = '观测距离检查失败：' + (err.error || err.message || '未知错误');
+  } finally {
+    $('distanceBtn').disabled = !state.run;
+  }
+}
+const fmt = (v) => (v == null || Number.isNaN(v) ? '—' : (Math.abs(v) < 1 ? v.toExponential(2) : v.toFixed(3)));
+
+$('distanceBtn').addEventListener('click', () => { if (state.run) presentDistanceCheck(); });
+
 function resetPanels() {
   $('qcPanel').innerHTML = '';
   $('topoNotice').textContent = '';
   $('regionPanel').className = 'region-list muted';
   $('regionPanel').textContent = '运行后显示';
   $('timingPanel').innerHTML = '';
+  $('distancePanel').className = 'qc muted';
+  $('distancePanel').textContent = '运行重建后计算';
+  $('distanceBtn').disabled = true;
+  $('distanceError').classList.add('hidden');
+  $('distanceError').textContent = '';
   $('runMeta').className = 'muted';
   $('runMeta').textContent = '尚无运行';
   hideFailure();
@@ -437,4 +512,5 @@ function resetPanels() {
 
 // ---------------- 启动 ----------------
 buildParamForm();
+loadRegressions();
 loadScenarios();

@@ -63,6 +63,7 @@ input, select {
 }
 .scenario-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 .scenario-list .btn { justify-content: flex-start; }
+.subhead { font-size: 11px; color: var(--muted); text-transform: none; letter-spacing: 0.02em; margin: 10px 0 6px; }
 .cloud-meta { font-size: 12px; word-break: break-all; }
 .cloud-meta b { color: var(--text); }
 

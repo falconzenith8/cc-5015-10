@@ -8,10 +8,16 @@ import { PointCloud } from '../core/pointcloud.js';
 import { runPipeline, PipelineError } from '../core/pipeline.js';
 import { PARAM_SCHEMA, defaultParams } from '../core/schema.js';
 import { parsePointCloud, meshToPLY, meshToOBJ, meshToJSON } from '../core/io.js';
+import { pointToAnalyticDistance } from '../core/analytic.js';
+import {
+  nearestNeighborSpacing, pointSetToMeshDistances, faceSamplesToAnalytic,
+  meshToAnalyticDistances, closureCoverage, meshTopology,
+} from '../core/metrics.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(__dirname, '../../web');
 const DATA_DIR = resolve(__dirname, '../../data');
+const FIXTURE_DIR = resolve(__dirname, '../../test/acceptance/fixtures');
 const PORT = Number(process.env.PORT || 8080);
 
 // 会话状态：原始冻结点云 + 修订版本 + 最近一次运行结果
@@ -19,6 +25,7 @@ const state = {
   originals: new Map(),   // cloudId -> PointCloud（永不改写）
   current: null,          // 当前活动 PointCloud（可能是修订版）
   currentId: null,
+  currentFixture: null,   // 若载入的是验收集样例，记住其解析真值（仅用于距离检查展示）
   runs: new Map(),        // runId -> 完整流水线结果
   lastRunId: null,
 };
@@ -48,6 +55,14 @@ function registerCloud(cloud) {
   state.current = cloud;
   state.currentId = cloud.id;
   return cloudSummary(cloud);
+}
+
+// 验收集 fixture：真实解析真值 + 构造的未观测区域，供“手动载入 + 设置尺度”时做距离检查。
+function loadFixtureDoc(name) {
+  if (!/^[\w.-]+$/.test(name || '')) return null;
+  const full = resolve(FIXTURE_DIR, `${name}.json`);
+  if (!full.startsWith(FIXTURE_DIR) || !existsSync(full)) return null;
+  return JSON.parse(readFileSync(full, 'utf8'));
 }
 
 function cloudSummary(cloud) {
@@ -110,6 +125,60 @@ async function handleApi(req, res, url) {
     return json(res, 200, { scenarios: files });
   }
 
+  // 点云重建回归样例（test/acceptance/fixtures）：可从模型操作视窗直接打开。
+  // 与数据场景分开列出，因为每个样例都带解析真值，可用于“重建表面与观测距离”检查。
+  if (req.method === 'GET' && route === '/api/regression-samples') {
+    const samples = existsSync(FIXTURE_DIR)
+      ? readdirSync(FIXTURE_DIR)
+        .filter((f) => f.endsWith('.json'))
+        .map((f) => {
+          try {
+            const doc = JSON.parse(readFileSync(resolve(FIXTURE_DIR, f), 'utf8'));
+            return {
+              name: doc.name, description: doc.description,
+              pointCount: doc.pointCount, hash: doc.hash,
+              analyticKind: doc.analytic?.kind,
+              unobserved: (doc.unobserved || []).map((r) => r.id),
+            };
+          } catch { return null; }
+        })
+        .filter(Boolean)
+      : [];
+    return json(res, 200, { samples });
+  }
+
+  if (req.method === 'POST' && route === '/api/load-regression-sample') {
+    const { name } = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+    const doc = loadFixtureDoc(name);
+    if (!doc) return json(res, 404, { error: `回归样例不存在: ${name}` });
+    const exclude = new Set(doc.metadata?.cleanExcludeTags || []);
+    const idx = [];
+    for (let i = 0; i < doc.points.length; i++) if (!exclude.has(doc.tags?.[i])) idx.push(i);
+    const cloud = new PointCloud({
+      points: idx.map((i) => doc.points[i]), views: idx.map((i) => doc.views?.[i] ?? null),
+      name: doc.name, sourceFormat: 'acceptance-fixture',
+    });
+    state.currentFixture = {
+      name: doc.name, hash: doc.hash, analytic: doc.analytic,
+      unobserved: doc.unobserved || [],
+      excludedTagCount: doc.points.length - idx.length,
+      noiseAmplitude: doc.metadata?.noiseAmplitude ?? null,
+      derivation: doc.metadata?.derivation || null,
+    };
+
+    return json(res, 200, {
+      cloud: registerCloud(cloud),
+      sample: {
+        name: doc.name, description: doc.description, hash: doc.hash,
+        analyticKind: doc.analytic?.kind,
+        cleanPointCount: idx.length,
+        excludedTagCount: doc.points.length - idx.length,
+        unobserved: (doc.unobserved || []).map((r) => r.id),
+        derivation: doc.metadata?.derivation || null,
+      },
+    });
+  }
+
   if (req.method === 'POST' && route === '/api/load-scenario') {
     const { name } = JSON.parse((await readBody(req)).toString('utf8') || '{}');
     if (!/^[\w.-]+$/.test(name || '')) return json(res, 400, { error: '非法场景名' });
@@ -117,6 +186,7 @@ async function handleApi(req, res, url) {
     if (!full.startsWith(DATA_DIR) || !existsSync(full)) return json(res, 404, { error: `场景不存在: ${name}` });
     const d = JSON.parse(readFileSync(full, 'utf8'));
     const cloud = new PointCloud({ points: d.points, views: d.views, name: d.name || name, sourceFormat: 'json' });
+    state.currentFixture = null;
     return json(res, 200, { cloud: registerCloud(cloud), scenario: { description: d.description, expectations: d.expectations } });
   }
 
@@ -134,6 +204,7 @@ async function handleApi(req, res, url) {
     }
     try {
       const cloud = parsePointCloud(data, filename);
+      state.currentFixture = null;
       return json(res, 200, { cloud: registerCloud(cloud) });
     } catch (err) {
       return json(res, 400, { error: `点云解析失败: ${err.message}` });
@@ -166,6 +237,8 @@ async function handleApi(req, res, url) {
     const { cloud, keptIndices, removedIndices } = base.revise({ keepMask, label: body.label || 'revision' });
     state.current = cloud;
     state.currentId = cloud.id;
+    // 修订后的点集已不是样例声明的那批，解析真值检查不再适用（避免用样例真值给别的点集背书）
+    state.currentFixture = null;
     return json(res, 200, { cloud: cloudSummary(cloud), keptIndices, removedIndices, baseHash: base.hash });
   }
 
@@ -189,6 +262,77 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && route === '/api/run/latest') {
     if (!state.lastRunId) return json(res, 404, { error: '尚无运行结果' });
     return json(res, 200, serializeRun(state.runs.get(state.lastRunId)));
+  }
+
+  // 观测距离检查：真实运算（点->重建表面距离，以及解析真值距离 / 错误封闭覆盖）。
+  // 前端只展示这里返回的数值，不做任何前端自算或默认占位。
+  // - 任何网格都可检查“观测点 -> 重建表面”距离（覆盖/贴合）；
+  // - 若当前点云来自回归样例，额外给出“重建表面 -> 解析真值”距离与孔洞覆盖面积占比。
+  if (req.method === 'GET' && route === '/api/distance-check') {
+    if (!state.lastRunId) return json(res, 400, { error: '尚无运行结果：请先运行重建' });
+    if (!state.current) return json(res, 400, { error: '尚未载入点云' });
+    const result = state.runs.get(state.lastRunId);
+    if (result.frozen.cloudHash !== state.current.hash) {
+      return json(res, 409, {
+        error: '当前点云与最近一次运行不一致（修订后尚未重跑）：请重新运行重建后再检查观测距离。',
+      });
+    }
+    const fixture = state.currentFixture;
+    const pts = state.current.points;
+    const p2m = pointSetToMeshDistances(pts, result.mesh);
+    const nns = nearestNeighborSpacing(pts);
+    const base = {
+      runId: result.runId,
+      cloudName: result.frozen.cloudName,
+      cloudHash: result.frozen.cloudHash,
+      method: result.mesh.method,
+      pointCount: pts.length,
+      nnMedian: nns.median,
+      pointToMesh: {
+        count: p2m.count, uncoveredCount: p2m.uncoveredCount,
+        median: p2m.median, p95: p2m.p95, max: p2m.max,
+      },
+      topology: meshTopology(result.mesh),
+    };
+    if (!fixture) {
+      return json(res, 200, {
+        ...base,
+        hasAnalyticTruth: false,
+        note: '当前点云无解析真值；观测距离仅表示“原始观测点 -> 重建表面”的贴合程度，不代表真值误差。',
+      });
+    }
+    const surface = faceSamplesToAnalytic(result.mesh, fixture.analytic, pointToAnalyticDistance);
+    const closure = closureCoverage(result.mesh, fixture.unobserved);
+    const meshToTruth = meshToAnalyticDistances(result.mesh, fixture.analytic, pointToAnalyticDistance);
+    const noise = fixture.noiseAmplitude;
+    if (noise == null) {
+      return json(res, 422, { error: `回归样例 ${fixture.name} 缺少 noiseAmplitude，无法独立推导容差` });
+    }
+    const tol = Math.max(4 * noise, 0.5 * nns.median);
+    return json(res, 200, {
+      ...base,
+      hasAnalyticTruth: true,
+      truth: {
+        sample: fixture.name, hash: fixture.hash, analyticKind: fixture.analytic.kind,
+        unobserved: fixture.unobserved.map((r) => r.id),
+        excludedTagCount: fixture.excludedTagCount,
+        derivation: fixture.derivation,
+      },
+      surfaceToTruth: {
+        sampleCount: surface.sampleCount, mean: surface.mean, max: surface.max, maxFace: surface.maxFace,
+        perVertexMedian: meshToTruth.median, perVertexP95: meshToTruth.p95, perVertexMax: meshToTruth.max,
+      },
+      closure: {
+        coveredArea: closure.coveredArea, referenceArea: closure.referenceArea, fraction: closure.fraction,
+        faceCount: closure.faces.length,
+      },
+      tolerance: {
+        value: tol,
+        rule: 'max(4×注入噪声幅度, 0.5×最近邻中位数)',
+        noiseAmplitude: noise,
+        nnMedian: nns.median,
+      },
+    });
   }
 
   // 网格导出
